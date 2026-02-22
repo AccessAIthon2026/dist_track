@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>FIND IT – Blind Object Finder</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--g:#00ff88;--b:#88aaff;--r:#ff5555;--bg:#07070f;--card:#0e0e1c}
+html,body{height:100%;background:var(--bg);color:#fff;font-family:'Courier New',monospace;display:flex;flex-direction:column;align-items:center;overflow-x:hidden}
+
+/* HEADER */
+#hdr{width:100%;max-width:480px;padding:16px 20px 8px;display:flex;justify-content:space-between;align-items:flex-end}
+#hdr h1{font-size:1.45rem;letter-spacing:.18em}
+#hdr .sub{font-size:.58rem;color:rgba(255,255,255,.22);letter-spacing:.35em;text-transform:uppercase;margin-bottom:2px}
+#badge{display:none;background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.3);color:var(--g);padding:4px 13px;border-radius:20px;font-size:.65rem;letter-spacing:.12em;white-space:nowrap}
+
+/* CAMERA */
+#cam{position:relative;width:calc(100% - 28px);max-width:480px;height:300px;background:var(--card);border-radius:18px;overflow:hidden;border:1px solid rgba(255,255,255,.05);margin:0 14px;flex-shrink:0}
+#vid{width:100%;height:100%;object-fit:cover;display:none}
+#cvs{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+
+/* IDLE SCREEN */
+#idle{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:20px}
+#idle-icon{font-size:3rem;transition:transform .3s}
+#idle-msg{font-size:.78rem;color:rgba(255,255,255,.28);letter-spacing:.1em;text-align:center;line-height:1.65;max-width:260px}
+#heard{font-size:.82rem;color:rgba(255,255,255,.5);font-style:italic;text-align:center;display:none;padding:0 20px}
+
+/* SCAN ANIMATION */
+#sline{position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,var(--g) 50%,transparent);display:none;animation:swp 2s linear infinite}
+@keyframes swp{0%{top:0%}100%{top:100%}}
+.c{position:absolute;width:20px;height:20px;border-color:rgba(0,255,136,.5);border-style:solid;display:none}
+.tl{top:8px;left:8px;border-width:2px 0 0 2px}.tr{top:8px;right:8px;border-width:2px 2px 0 0}
+.bl{bottom:8px;left:8px;border-width:0 0 2px 2px}.br{bottom:8px;right:8px;border-width:0 2px 2px 0}
+
+/* INSTRUCTOR PANEL — the key new feature */
+#instructor{
+  width:calc(100% - 28px);max-width:480px;margin:10px 14px 0;
+  background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.2);
+  border-radius:14px;padding:14px 16px;display:none;
+  flex-direction:column;gap:8px;
+}
+#inst-label{font-size:.6rem;color:rgba(0,255,136,.5);letter-spacing:.3em;text-transform:uppercase}
+#inst-msg{font-size:1rem;color:#fff;line-height:1.5;font-weight:500;letter-spacing:.04em;min-height:28px}
+#inst-arrow{font-size:2.5rem;text-align:center;transition:transform .4s;line-height:1}
+
+/* COMPASS / DIRECTION INDICATOR */
+#compass{
+  width:calc(100% - 28px);max-width:480px;margin:8px 14px 0;
+  display:none;flex-direction:row;gap:6px;
+}
+.zone{
+  flex:1;height:36px;border-radius:8px;border:1px solid rgba(255,255,255,.07);
+  background:rgba(255,255,255,.03);display:flex;align-items:center;justify-content:center;
+  font-size:.65rem;color:rgba(255,255,255,.25);letter-spacing:.1em;text-transform:uppercase;
+  transition:background .3s,border-color .3s,color .3s;
+}
+.zone.active{background:rgba(0,255,136,.15);border-color:rgba(0,255,136,.5);color:var(--g);font-weight:700}
+
+/* DISTANCE BAR */
+#dist-wrap{width:calc(100% - 28px);max-width:480px;margin:6px 14px 0;display:none}
+#dist-label{display:flex;justify-content:space-between;font-size:.6rem;color:rgba(255,255,255,.2);margin-bottom:4px;letter-spacing:.08em}
+#dist-bg{height:6px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
+#dist-fill{height:100%;background:linear-gradient(90deg,#ff5555,#ffaa00,#00ff88);border-radius:4px;width:0%;transition:width .4s}
+
+/* STATUS */
+#sbar{width:calc(100% - 28px);max-width:480px;margin:8px 14px 0;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:10px 14px;display:flex;align-items:flex-start;gap:10px;flex-shrink:0}
+#dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.18);flex-shrink:0;margin-top:4px;transition:background .3s,box-shadow .3s}
+#dot.g{background:var(--g);box-shadow:0 0 8px var(--g)}
+#dot.y{background:#ffaa00;box-shadow:0 0 8px #ffaa00;animation:blk 1s ease infinite}
+#dot.b{background:var(--b);box-shadow:0 0 8px var(--b)}
+#dot.r{background:var(--r)}
+@keyframes blk{0%,100%{opacity:1}50%{opacity:.3}}
+#stxt{font-size:.7rem;color:rgba(255,255,255,.4);line-height:1.55}
+
+/* PROGRESS BAR */
+#prog{width:calc(100% - 28px);max-width:480px;margin:5px 14px 0;display:none}
+#pbg{height:3px;background:rgba(255,255,255,.07);border-radius:4px;overflow:hidden}
+#pfill{height:100%;background:var(--g);width:0%;transition:width .25s;border-radius:4px}
+#plbl{font-size:.58rem;color:rgba(255,255,255,.22);margin-top:4px;letter-spacing:.1em}
+
+/* BUTTONS */
+#btns{width:calc(100% - 28px);max-width:480px;margin:10px 14px 0;padding-bottom:32px;display:flex;flex-direction:column;gap:9px;flex-shrink:0}
+.bp{width:100%;padding:20px;border-radius:15px;border:none;cursor:pointer;background:linear-gradient(135deg,#00ff88,#00cc66);color:#07070f;font-family:'Courier New',monospace;font-size:1rem;font-weight:700;letter-spacing:.18em;box-shadow:0 6px 32px rgba(0,255,136,.26);transition:transform .12s,opacity .2s;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.bp:active{transform:scale(.96)}.bp:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.bs{padding:15px;border-radius:13px;cursor:pointer;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.38);font-family:'Courier New',monospace;font-size:.78rem;letter-spacing:.18em;transition:transform .12s;touch-action:manipulation}
+.bs:active{transform:scale(.97)}
+#row-found{display:none;gap:9px}
+#row-found .bp{flex:1;font-size:.78rem;padding:16px 6px}
+#row-found .bs{padding:16px}
+#li{display:none;padding:17px;border-radius:15px;border:2px solid rgba(136,170,255,.35);background:rgba(136,170,255,.05);align-items:center;justify-content:center;gap:10px}
+#li span{color:var(--b);letter-spacing:.2em;font-size:.8rem}
+.dw{width:8px;height:8px;border-radius:50%;background:var(--b);animation:wv .9s ease-in-out infinite}
+.dw:nth-child(2){animation-delay:.15s}.dw:nth-child(3){animation-delay:.3s}
+@keyframes wv{0%,100%{transform:scaleY(1);opacity:.6}50%{transform:scaleY(2);opacity:1}}
+</style>
+</head>
+<body>
+
+<div id="hdr">
+  <div><div class="sub">Blind Object Finder</div><h1>FIND IT</h1></div>
+  <div id="badge">—</div>
+</div>
+
+<div id="cam">
+  <video id="vid" playsinline muted></video>
+  <canvas id="cvs"></canvas>
+  <div id="idle">
+    <div id="idle-icon">🔍</div>
+    <div id="idle-msg">Tap the button below and say what you are looking for</div>
+    <div id="heard"></div>
+  </div>
+  <div id="sline"></div>
+  <div class="c tl"></div><div class="c tr"></div>
+  <div class="c bl"></div><div class="c br"></div>
+</div>
+
+<!-- INSTRUCTOR PANEL -->
+<div id="instructor">
+  <div id="inst-label">🧭 INSTRUCTOR</div>
+  <div id="inst-arrow">⬆️</div>
+  <div id="inst-msg">Scanning…</div>
+</div>
+
+<!-- DIRECTION ZONES -->
+<div id="compass">
+  <div class="zone" id="z-left">◀ LEFT</div>
+  <div class="zone" id="z-center">▲ CENTER</div>
+  <div class="zone" id="z-right">RIGHT ▶</div>
+</div>
+
+<!-- DISTANCE BAR -->
+<div id="dist-wrap">
+  <div id="dist-label"><span>FAR</span><span id="dist-val">—</span><span>CLOSE</span></div>
+  <div id="dist-bg"><div id="dist-fill"></div></div>
+</div>
+
+<div id="sbar"><div id="dot"></div><div id="stxt">Loading AI model…</div></div>
+<div id="prog"><div id="pbg"><div id="pfill"></div></div><div id="plbl"></div></div>
+
+<div id="btns">
+  <button class="bp" id="btn-speak" onclick="startListening()" disabled>🎙&nbsp;&nbsp;TAP &amp; SPEAK</button>
+  <div id="li"><div class="dw"></div><div class="dw"></div><div class="dw"></div><span>LISTENING…</span></div>
+  <button class="bs" id="btn-stop" style="display:none" onclick="resetApp()">✕&nbsp;&nbsp;STOP</button>
+  <div id="row-found">
+    <button class="bp" onclick="resetApp()">🔍 NEW SEARCH</button>
+    <button class="bs" onclick="repeatLast()">🔊 REPEAT</button>
+  </div>
+  <button class="bs" id="btn-again" style="display:none" onclick="resetApp()">↩&nbsp;&nbsp;TRY AGAIN</button>
+</div>
+
+<script>
+// ── Synonyms ────────────────────────────────────────────────────────────────
+const SYN = {
+  'phone':'cell phone','mobile':'cell phone','smartphone':'cell phone','iphone':'cell phone',
+  'water bottle':'bottle','water':'bottle','plastic bottle':'bottle',
+  'mug':'cup','glass':'cup','tumbler':'cup',
+  'sofa':'couch','settee':'couch',
+  'table':'dining table','desk':'dining table',
+  'plant':'potted plant','flower':'potted plant',
+  'computer':'laptop','notebook':'laptop','macbook':'laptop',
+  'television':'tv','telly':'tv','monitor':'tv',
+  'fridge':'refrigerator','freezer':'refrigerator',
+  'controller':'remote','clicker':'remote',
+  'bag':'backpack','purse':'handbag',
+  'teddy':'teddy bear','stuffed animal':'teddy bear',
+  'plane':'airplane','bike':'bicycle','motorbike':'motorcycle',
+}
+const ALL = ['person','bicycle','car','motorcycle','airplane','bus','train','truck','boat','traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat','dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair','couch','potted plant','bed','dining table','toilet','tv','laptop','mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush']
+
+// ── State ────────────────────────────────────────────────────────────────────
+let model=null, target='', lastSpoken='', lastInst='', isScanning=false
+let stream=null, scanTm=null, recognition=null
+let speakTm=null, lastSpeakTime=0
+const SPEAK_COOLDOWN = 2800  // ms between voice instructions
+
+const vid=document.getElementById('vid')
+const cvs=document.getElementById('cvs')
+const oc=cvs.getContext('2d')
+
+// ── Voice ────────────────────────────────────────────────────────────────────
+function speak(text, rate=1.08, force=false) {
+  const now = Date.now()
+  if (!force && now - lastSpeakTime < SPEAK_COOLDOWN) return
+  if (window.speechSynthesis.speaking && !force) return
+  lastSpeakTime = now
+  speechSynthesis.cancel()
+  const u = new SpeechSynthesisUtterance(text)
+  u.rate = rate; u.pitch = 1.05; u.volume = 1
+  speechSynthesis.speak(u)
+  lastSpoken = text
+}
+function repeatLast() { if(lastSpoken){speechSynthesis.cancel();speak(lastSpoken,1.0,true)} }
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function setStatus(msg,cls=''){document.getElementById('stxt').textContent=msg;document.getElementById('dot').className=cls}
+function showProg(p,l){document.getElementById('prog').style.display='block';document.getElementById('pfill').style.width=p+'%';document.getElementById('plbl').textContent=l}
+function hideProg(){document.getElementById('prog').style.display='none'}
+function setBadge(t){const b=document.getElementById('badge');b.style.display=t?'block':'none';if(t)b.textContent=t.toUpperCase()}
+function showScan(on){document.getElementById('sline').style.display=on?'block':'none';document.querySelectorAll('.c').forEach(e=>e.style.display=on?'block':'none')}
+
+function setUI(state){
+  document.getElementById('btn-speak').style.display  = state==='idle'     ?'block':'none'
+  document.getElementById('li').style.display         = state==='listening'?'flex':'none'
+  document.getElementById('btn-stop').style.display   = state==='scanning' ?'block':'none'
+  document.getElementById('row-found').style.display  = state==='found'    ?'flex':'none'
+  document.getElementById('btn-again').style.display  = state==='notfound' ?'block':'none'
+  showScan(state==='scanning')
+  // Instructor + compass visible while scanning
+  const scan = state==='scanning'
+  document.getElementById('instructor').style.display = scan?'flex':'none'
+  document.getElementById('compass').style.display    = scan?'flex':'none'
+  document.getElementById('dist-wrap').style.display  = scan?'block':'none'
+}
+
+// Set direction compass highlight
+function setZone(zone){ // 'left','center','right', or null
+  ['left','center','right'].forEach(z=>{
+    document.getElementById('z-'+z).classList.toggle('active', z===zone)
+  })
+}
+
+// Set distance bar (0=far, 1=close)
+function setDistBar(ratio) {
+  document.getElementById('dist-fill').style.width = Math.round(ratio*100)+'%'
+  const labels = ['Far away','A few steps','Nearby','Very close','Right here!']
+  const idx = Math.min(4, Math.floor(ratio*5))
+  document.getElementById('dist-val').textContent = labels[idx]
+}
+
+// Update instructor UI + speak instruction
+function updateInstructor(zone, ratio, cls, notFound) {
+  const arrows = {left:'↰', center:'⬆', right:'↱', null:'🔄'}
+  const emojiArrow = {left:'⬅️', center:'⬆️', right:'➡️'}
+  const instEl = document.getElementById('inst-msg')
+  const arrowEl = document.getElementById('inst-arrow')
+
+  if (notFound) {
+    arrowEl.textContent = '🔄'
+    instEl.textContent = `No ${target} detected — keep moving`
+    setZone(null)
+    setDistBar(0)
+    return
+  }
+
+  // Direction instruction
+  let dirMsg = ''
+  if (zone==='left')   dirMsg = `Turn left — ${cls} is to your left`
+  if (zone==='center') dirMsg = `Keep going straight — ${cls} is ahead`
+  if (zone==='right')  dirMsg = `Turn right — ${cls} is to your right`
+
+  // Distance instruction
+  let distMsg = ''
+  if (ratio > 0.7)       distMsg = 'You are right next to it!'
+  else if (ratio > 0.45) distMsg = 'Very close, almost there!'
+  else if (ratio > 0.2)  distMsg = 'Getting closer.'
+  else                   distMsg = 'Keep moving forward.'
+
+  arrowEl.textContent = emojiArrow[zone] || '⬆️'
+  instEl.textContent = `${dirMsg}. ${distMsg}`
+
+  setZone(zone)
+  setDistBar(ratio)
+
+  // Speak combined instruction
+  const fullMsg = `${dirMsg}. ${distMsg}`
+  if (fullMsg !== lastInst) {
+    speak(fullMsg, 1.05)
+    lastInst = fullMsg
+  }
+}
+
+// ── Load model ────────────────────────────────────────────────────────────────
+async function loadModel() {
+  try {
+    showProg(15,'Initializing TensorFlow…')
+    await tf.ready()
+    showProg(40,'Downloading object detection model…')
+    model = await cocoSsd.load({ base:'lite_mobilenet_v2' })
+    showProg(100,'Model ready ✓')
+    setTimeout(hideProg,1200)
+    setStatus('Ready — tap the button and say what you are looking for','g')
+    document.getElementById('btn-speak').disabled = false
+    speak('Ready. Tap the big button and tell me what you are looking for.', 1.0, true)
+  } catch(e) {
+    console.error(e)
+    hideProg()
+    setStatus('Model failed to load — check internet and reload','r')
+    speak('Model failed to load. Please check your internet and reload.', 1.0, true)
+  }
+}
+
+// ── Resolve spoken word → COCO label ─────────────────────────────────────────
+function resolveTarget(text) {
+  const lower = text.toLowerCase().trim()
+  for (const k of Object.keys(SYN).sort((a,b)=>b.length-a.length))
+    if (lower.includes(k)) return SYN[k]
+  for (const lbl of ALL)
+    if (lower.includes(lbl)) return lbl
+  const pats = [
+    /(?:looking for|find|where(?:'s| is)|locate|search for|i need) (?:my |the |a |an )?(.+)/,
+    /(?:my |the |a |an )(.+)/,
+  ]
+  for (const p of pats) {
+    const m = lower.match(p)
+    if (m?.[1]) {
+      const noun = m[1].replace(/[?.!,].*$/,'').trim()
+      for (const lbl of ALL)
+        if (lbl.includes(noun)||noun.includes(lbl)) return lbl
+      return noun
+    }
+  }
+  return lower
+}
+
+// ── Speech recognition ────────────────────────────────────────────────────────
+function startListening() {
+  const SR = window.SpeechRecognition||window.webkitSpeechRecognition
+  if (!SR) { alert('Please use Chrome or Edge.'); return }
+  setUI('listening')
+  setStatus('Listening…','b')
+  document.getElementById('idle-msg').textContent = 'Listening… say what you are looking for'
+  document.getElementById('heard').style.display = 'none'
+  speak('Listening. What are you looking for?', 1.0, true)
+
+  recognition = new SR()
+  recognition.continuous = false
+  recognition.interimResults = true
+  recognition.lang = 'en-US'
+  let finalText = ''
+
+  recognition.onresult = e => {
+    const t = Array.from(e.results).map(r=>r[0].transcript).join('')
+    document.getElementById('heard').style.display='block'
+    document.getElementById('heard').textContent=`"${t}"`
+    finalText = t
+  }
+  recognition.onend = () => {
+    if (!finalText) {
+      speak('I did not hear you. Tap and try again.', 1.0, true)
+      setStatus('Nothing heard — tap to try again','')
+      setUI('idle')
+      document.getElementById('idle-msg').textContent='Tap the button and say what you are looking for'
+      return
+    }
+    target = resolveTarget(finalText)
+    setBadge(target)
+    speak(`Looking for ${target}. Opening camera now.`, 1.1, true)
+    setStatus(`Target: ${target.toUpperCase()} — opening camera…`,'y')
+    startCamera()
+  }
+  recognition.onerror = () => {
+    speak('Could not hear. Please tap and try again.', 1.0, true)
+    setStatus('Could not hear — tap to try again','')
+    setUI('idle')
+  }
+  recognition.start()
+}
+
+// ── Camera ────────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720} }
+      })
+    } catch {
+      stream = await navigator.mediaDevices.getUserMedia({ video:true })
+    }
+    vid.srcObject = stream
+    vid.style.display = 'block'
+    document.getElementById('idle').style.display = 'none'
+    await vid.play()
+
+    isScanning = true
+    setUI('scanning')
+    lastInst = ''
+    lastSpeakTime = 0
+    setStatus(`Scanning for "${target}"… move phone slowly`,'y')
+    speak(`Scanning for ${target}. I will guide you. Move your phone slowly.`, 1.0, true)
+
+    await new Promise(r=>setTimeout(r,900)) // warm up
+
+    let frame=0, noDetectCount=0
+    const MAX=60 // ~90 seconds
+
+    async function doScan() {
+      if (!isScanning) return
+      frame++
+      const found = await detect()
+      if (found === 'FOUND') return // success, done
+      if (found === false) {
+        noDetectCount++
+        if (noDetectCount % 3 === 0) {
+          updateInstructor(null, 0, target, true)
+          // Extra guidance if lost for a while
+          if (noDetectCount >= 6) {
+            speak(`Still searching for ${target}. Try turning around or moving to another area.`, 1.0, true)
+            noDetectCount = 0
+          }
+        }
+      } else {
+        noDetectCount = 0
+      }
+      if (frame >= MAX) {
+        stopCamera()
+        setUI('notfound')
+        const msg=`Could not find ${target} after extended search. Try a different room.`
+        setStatus(msg,'r')
+        speak(msg, 1.0, true)
+        document.getElementById('idle').style.display='flex'
+        document.getElementById('idle-icon').textContent='❌'
+        document.getElementById('idle-msg').textContent=msg
+        return
+      }
+      scanTm = setTimeout(doScan, 1400)
+    }
+    doScan()
+
+  } catch(e) {
+    console.error(e)
+    setStatus('Camera access denied','r')
+    speak('Camera access denied. Please allow camera permission and try again.', 1.0, true)
+    setUI('idle')
+  }
+}
+
+function stopCamera() {
+  stopVibration()
+  isScanning = false
+  clearTimeout(scanTm)
+  if (stream) { stream.getTracks().forEach(t=>t.stop()); stream=null }
+  vid.style.display='none'; vid.srcObject=null
+  showScan(false)
+  oc.clearRect(0,0,cvs.width,cvs.height)
+  document.getElementById('instructor').style.display='none'
+  document.getElementById('compass').style.display='none'
+  document.getElementById('dist-wrap').style.display='none'
+}
+
+// ── Detection + Instructor ────────────────────────────────────────────────────
+async function detect() {
+  if (!model||vid.readyState<2||!vid.videoWidth) return false
+
+  cvs.width=vid.videoWidth; cvs.height=vid.videoHeight
+  oc.clearRect(0,0,cvs.width,cvs.height)
+
+  let preds
+  try { preds = await model.detect(vid) } catch(e) { console.error(e); return false }
+
+  // Draw all detections faintly
+  for (const p of preds) {
+    const [x,y,w,h]=p.bbox
+    oc.strokeStyle='rgba(255,255,255,.1)'; oc.lineWidth=1
+    oc.strokeRect(x,y,w,h)
+  }
+
+  // Find target
+  const tgt = target.toLowerCase()
+  const matches = preds.filter(p=>{
+    const cls=p.class.toLowerCase()
+    return cls===tgt||cls.includes(tgt)||tgt.includes(cls)
+  })
+
+  if (!matches.length) {
+    stopVibration()
+    return false
+  }
+
+  const best = matches.reduce((a,b)=>a.score>b.score?a:b)
+  const [bx,by,bw,bh]=best.bbox
+  const vw=cvs.width, vh=cvs.height
+
+  // Box center
+  const cx=bx+bw/2, cy=by+bh/2
+  const area=(bw*bh)/(vw*vh)
+
+  // Direction zone
+  const zone = cx<vw*0.35?'left':cx>vw*0.65?'right':'center'
+
+  // Distance ratio (0=far, 1=close). Based on area coverage
+  // area 0.01 = far, area 0.4+ = very close
+  const distRatio = Math.min(1, Math.max(0, (Math.sqrt(area) - 0.1) / 0.5))
+  vibrateByDistance(distRatio)
+
+  // ── Draw detection box ──
+  oc.save()
+  oc.shadowBlur=18; oc.shadowColor='#00ff88'
+  oc.strokeStyle='#00ff88'; oc.lineWidth=3
+  oc.strokeRect(bx,by,bw,bh)
+  oc.fillStyle='rgba(0,255,136,.1)'; oc.fillRect(bx,by,bw,bh)
+
+  // Arrow inside box showing direction hint
+  oc.font=`bold ${Math.max(20,Math.min(60,bw/3))}px sans-serif`
+  oc.shadowBlur=0; oc.fillStyle='rgba(0,255,136,.7)'
+  const arrowChar = zone==='left'?'←':zone==='right'?'→':'↑'
+  const aw=oc.measureText(arrowChar).width
+  oc.fillText(arrowChar, bx+bw/2-aw/2, by+bh/2+10)
+
+  // Label pill
+  const lbl=`${best.class} ${Math.round(best.score*100)}%`
+  oc.font='bold 13px Courier New'
+  const tw=oc.measureText(lbl).width+14
+  oc.fillStyle='#00ff88'
+  oc.beginPath()
+  oc.roundRect?oc.roundRect(bx,by-27,tw,24,5):oc.rect(bx,by-27,tw,24)
+  oc.fill()
+  oc.fillStyle='#07070f'; oc.fillText(lbl,bx+7,by-9)
+  oc.restore()
+
+  // ── Update instructor UI ──
+  updateInstructor(zone, distRatio, best.class, false)
+
+  // ── Check if FOUND (object is large and centered) ──
+  if (area > 0.18 && zone==='center') {
+    // FOUND!
+    stopVibration()
+    const foundMsg = `You found it! ${best.class} is right in front of you!`
+    speak(foundMsg, 0.9, true)
+    setStatus(foundMsg,'g')
+
+    // Flash the box green
+    oc.save()
+    oc.strokeStyle='#00ff88'; oc.lineWidth=5
+    oc.shadowBlur=30; oc.shadowColor='#00ff88'
+    oc.strokeRect(bx,by,bw,bh)
+    oc.restore()
+
+    setTimeout(()=>{
+      stopCamera()
+      setUI('found')
+      document.getElementById('idle').style.display='flex'
+      document.getElementById('idle-icon').textContent='✅'
+      document.getElementById('idle-msg').textContent=foundMsg
+      document.getElementById('heard').style.display='none'
+    }, 1200)
+    return 'FOUND'
+  }
+
+  return true // detected but not confirmed found yet
+}
+
+// ── HAPTIC FEEDBACK SYSTEM ───────────────────────────────────────────────────
+let vibTimer = null
+
+function stopVibration() {
+  if ('vibrate' in navigator) navigator.vibrate(0)
+  clearTimeout(vibTimer)
+  vibTimer = null
+}
+
+function vibrateByDistance(distRatio) {
+  if (!('vibrate' in navigator)) return
+
+  // Clamp safety
+  distRatio = Math.max(0, Math.min(1, distRatio))
+
+  // Closer = stronger & faster
+  const minDuration = 25
+  const maxDuration = 180
+
+  const minGap = 900
+  const maxGap = 120
+
+  const duration = minDuration + (maxDuration - minDuration) * distRatio
+  const gap = minGap - (minGap - maxGap) * distRatio
+
+  navigator.vibrate(duration)
+
+  clearTimeout(vibTimer)
+  vibTimer = setTimeout(() => {
+    if (isScanning) vibrateByDistance(distRatio)
+  }, gap)
+}
+
+// ── Reset ─────────────────────────────────────────────────────────────────────
+function resetApp() {
+  isScanning=false; clearTimeout(scanTm)
+  stopCamera()
+  try{if(recognition)recognition.abort()}catch{}
+  speechSynthesis.cancel()
+  target=''; lastSpoken=''; lastInst=''
+  setBadge(null)
+  document.getElementById('idle').style.display='flex'
+  document.getElementById('idle-icon').textContent='🔍'
+  document.getElementById('idle-msg').textContent='Tap the button below and say what you are looking for'
+  document.getElementById('heard').style.display='none'
+  setUI('idle')
+  setStatus('Ready — tap the button and say what you are looking for','g')
+  speak('Ready. Tap to search for a new object.', 1.0, true)
+}
+
+window.addEventListener('load', loadModel)
+</script>
+</body>
+</html>
